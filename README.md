@@ -1,2 +1,2 @@
 # LICORScabinet
-Code for LICORS derived methods, such as Moonshine and One Hundred Proof
+Code for LICORS derived methods, such as MixedLICORS, Moonshine and One Hundred Proof. 
