@@ -25,8 +25,10 @@ class OHP(object):
             self.state_points = histories.shape[0]
             ''' Create Random Sample wKDE evaluator. Mode is for covariance mode. '''            
             num_pts = min(self.num_of_kde_points, histories.shape[0])
-            sampled_histories = np.random.choice(histories.shape[0], size=num_pts, replace=False)            
+            sampled_histories = np.random.choice(histories.shape[0], size=num_pts, replace=False)
+            sampled_futures = np.random.choice(futures.shape[0], size=num_pts, replace=False)
             self.wKDE = wKDE(histories[sampled_histories], mode='FULL')
+            self.wKDE_FLC = wKDE(futures[sampled_futures], mode='FULL')
 
         def distance_to_state(self, point):
             point = point.reshape((1,-1))
@@ -34,6 +36,9 @@ class OHP(object):
            
         def batch_lc_likelihood_given_state(self, points):
             return self.wKDE(multi_flatten(points))
+
+        def batch_emission_likelihood_given_state(self, futures):
+            return self.wKDE_FLC(multi_flatten(futures))
 
         def state_likelihood(self):
             return self.state_points / self.total_points
@@ -64,13 +69,15 @@ class OHP(object):
                 ps = self.predictive_state(flat_histories[vectors_in_state], flat_futures[vectors_in_state], N)
                 self.cluster_assignments[vectors_in_state] = label
                 self.states.append(ps)
-        ''' Print our states info '''                
+        ''' Print out states info '''  
+        """
         tups = []      
         for s in self.states:
             tups.append((s.state_likelihood(), s.mean_future))
         tups.sort(reverse=True)
         for l, m in tups:
-            print l, m
+            print l, m        
+        """
         ''' Create mean futures and histories for states '''            
         self.state_mean_futures_array = np.array([s.mean_future for s in self.states])
         self.state_mean_histories_array = np.array([s.mean_history for s in self.states])    
@@ -110,6 +117,24 @@ class OHP(object):
     def predict_batch(self, pasts, points_label=None, do_not_cache=False):
         ''' Batch prediction of pasts '''
         return self.predict_batch_avg(pasts, points_label, do_not_cache)
+
+    def compute_likelihoods(self, pasts, futures):
+        state_given_past_probs = []
+        future_given_state_probs = []
+        for k, s in enumerate(self.states):
+            print "Evaluating state", k
+            state_given_past_probs.append(s.batch_lc_likelihood_given_state(pasts))
+            future_given_state_probs.append(s.batch_emission_likelihood_given_state(futures))
+        state_given_past_probs = np.nextafter(state_given_past_probs, 1.).T
+        future_given_state_probs = np.nextafter(future_given_state_probs, 1.).T
+        ''' Weight by state likelihood '''
+        likelihoods = np.array([s.state_likelihood() for s in self.states])
+        state_given_past_probs *= likelihoods
+        state_given_past_probs = np.nextafter(state_given_past_probs, 1.)
+        ''' Normalize '''
+        state_given_past_probs /= np.expand_dims(np.sum(state_given_past_probs, axis=1), axis=1)        
+        ''' Return mixed likelihoods '''
+        return np.nextafter(np.sum(np.multiply(state_given_past_probs, future_given_state_probs), axis=1), 1.)
 
     def total_prediction_MSE(self, pasts, true_futures):
         pasts = multi_flatten(pasts)

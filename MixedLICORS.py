@@ -275,24 +275,26 @@ class MixedLICORS(object):
         self.W[:,a] += self.W[:,b]
         self.W = np.delete(self.W, b, axis=1)        
 
-    def pdf(self, FLCs, PLCs):
+    def compute_likelihoods(self, PLCs, FLCs):
         K = self.K()
         N = self.N()
-        component_densities = self.f_hat_conditional_densities(FLCs, label="PDF_FLCs")
-        gaussian_evals = np.vstack([self.PLC_densities(j, PLCs) for j in range(K)]).T
+        future_given_state_probs = np.nextafter(self.f_hat_conditional_densities(FLCs, label="PDF_FLCs"), 1.)
+        state_given_past_probs = np.nextafter(np.vstack([self.PLC_densities(j, PLCs) for j in range(K)]), 1.).T        
+        ''' Weight by state likelihood '''
         n_hats = self.W.sum(axis=0) / N
-        raw_component_weights = gaussian_evals * n_hats + FUDGE_FACTOR
-        normalized_component_weights = raw_component_weights / np.expand_dims(np.sum(raw_component_weights, axis=1), axis=1)
-        print component_densities.shape
-        print normalized_component_weights.shape
-        return np.dot(component_densities, normalized_component_weights).item()
+        state_given_past_probs *= n_hats
+        state_given_past_probs = np.nextafter(state_given_past_probs, 1.)
+        ''' Normalize '''
+        state_given_past_probs /= np.expand_dims(np.sum(state_given_past_probs, axis=1), axis=1)
+        ''' Return mixed likelihoods '''
+        return np.nextafter(np.sum(np.multiply(state_given_past_probs, future_given_state_probs), axis=1), 1.)
 
     def log_likelihood(self, light_cone_seq):
         """ Calculates log-likelihood for a sequence of light_cones. Useful for classification.            
         """
         PLCs = self.get_PLCs(light_cones=light_cone_seq)
         FLCs = self.get_FLCs(light_cones=light_cone_seq)       
-        return np.log(self.pdf(FLCs, PLCs)).sum(axis=0)
+        return np.log(self.compute_probs(PLCs, FLCs)).sum(axis=0)
 
     def get_current_MSE(self):
         test_PLCs = self.get_PLCs(light_cones=self.test_light_cones)

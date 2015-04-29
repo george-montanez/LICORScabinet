@@ -26,6 +26,8 @@ class Moonshine(object):
             ''' Nearest neighbor structure for doing truncated wKDE '''
             self.nbrs = NearestNeighbors(n_neighbors=min(self.num_of_neighbors, len(histories)), 
                     algorithm='ball_tree').fit(histories)
+            self.future_nbrs = NearestNeighbors(n_neighbors=min(self.num_of_neighbors, len(futures)), 
+                    algorithm='ball_tree').fit(futures)
 
         def distance_to_state(self, point):
             point = point.reshape((1,-1))
@@ -39,6 +41,17 @@ class Moonshine(object):
             ''' Truncated wKDE '''
             VGK = VectorGaussianKernel()
             bw = VGK.rule_of_thumb_bandwidth(self.histories, num_pts)
+            bandwidths = np.ones(pts.shape[0]) * bw
+            return VGK.KDE_evaluation(distances, bandwidths, dim, num_pts)
+
+        def batch_emission_likelihood_given_state(self, futures):
+            pts = multi_flatten(futures)
+            num_pts = self.futures.shape[0]
+            dim = self.futures.shape[1]
+            distances, indices = self.future_nbrs.kneighbors(pts)
+            ''' Truncated wKDE '''
+            VGK = VectorGaussianKernel()
+            bw = VGK.rule_of_thumb_bandwidth(self.futures, num_pts)
             bandwidths = np.ones(pts.shape[0]) * bw
             return VGK.KDE_evaluation(distances, bandwidths, dim, num_pts)
 
@@ -151,6 +164,24 @@ class Moonshine(object):
         predictions = np.array([self.predict(p.reshape((1,-1))) for p in pasts])
         truth = np.array(true_futures)
         return np.sum((predictions - truth)**2) / len(true_futures)
+
+    def compute_likelihoods(self, pasts, futures):
+        state_given_past_probs = []
+        future_given_state_probs = []
+        for k, s in enumerate(self.states):
+            print "Evaluating state", k
+            state_given_past_probs.append(s.batch_lc_likelihood_given_state(pasts))
+            future_given_state_probs.append(s.batch_emission_likelihood_given_state(futures))
+        state_given_past_probs = np.nextafter(state_given_past_probs, 1.).T
+        future_given_state_probs = np.nextafter(future_given_state_probs, 1.).T
+        ''' Weight by state likelihood '''
+        likelihoods = np.array([s.state_likelihood() for s in self.states])
+        state_given_past_probs *= likelihoods
+        state_given_past_probs = np.nextafter(state_given_past_probs, 1.)
+        ''' Normalize '''
+        state_given_past_probs /= np.expand_dims(np.sum(state_given_past_probs, axis=1), axis=1)        
+        ''' Return mixed likelihoods '''
+        return np.nextafter(np.sum(np.multiply(state_given_past_probs, future_given_state_probs), axis=1), 1.)
 
     def save_params(self, fold):
         pass
