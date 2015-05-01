@@ -2,17 +2,11 @@ from __future__ import division
 import numpy as np
 from collections import defaultdict
 from sklearn.cluster import MiniBatchKMeans
-from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import cdist
 from time import time
 from multi_flatten import multi_flatten
 from cluster import *
-from wKDE import wKDE
-from VectorGaussianKernel import VectorGaussianKernel
-from scipy import stats
-from sklearn.neighbors import KernelDensity
-from sklearn.grid_search import GridSearchCV
-from scipy.cluster.vq import kmeans2, whiten
+from WeightedKDE import WeightedKDE as DenEst
 
 class OHP(object):
     class predictive_state(object):        
@@ -23,27 +17,23 @@ class OHP(object):
             self.mean_history = np.mean(histories, axis=0)
             self.total_points = N
             self.state_points = histories.shape[0]
-            ''' Create Random Sample wKDE evaluator. Mode is for covariance mode. '''            
-            num_pts = min(self.num_of_kde_points, histories.shape[0])
-            sampled_histories = np.random.choice(histories.shape[0], size=num_pts, replace=False)
-            sampled_futures = np.random.choice(futures.shape[0], size=num_pts, replace=False)
-            self.wKDE = wKDE(histories[sampled_histories], mode='FULL')
-            self.wKDE_FLC = wKDE(futures[sampled_futures], mode='FULL')
+            self.FLC_DE = DenEst(futures, num_subsamples=self.num_of_kde_points, mode='FULL')
+            self.PLC_DE = DenEst(histories, num_subsamples=self.num_of_kde_points, mode='FULL')            
 
         def distance_to_state(self, point):
             point = point.reshape((1,-1))
             return cdist(point, self.mean_history, 'euclidean').item()
            
         def batch_lc_likelihood_given_state(self, points):
-            return self.wKDE(multi_flatten(points))
+            return self.PLC_DE(multi_flatten(points))
 
         def batch_emission_likelihood_given_state(self, futures):
-            return self.wKDE_FLC(multi_flatten(futures))
+            return self.FLC_DE(multi_flatten(futures))
 
         def state_likelihood(self):
             return self.state_points / self.total_points
 
-    def __init__(self, K_max, cluster_epsilon=0.5, fold_number=1):
+    def __init__(self, K_max, cluster_epsilon=0.5, fold_number=1, verbose=True):
         ''' Initialization '''
         self.K_max = K_max
         self.state_weights = []
@@ -51,6 +41,7 @@ class OHP(object):
         self.cluster_assignments = []
         self.cluster_epsilon = cluster_epsilon
         self.fold_number = fold_number
+        self.verbose = verbose
 
     def learn(self, histories, futures):        
         ''' Flatten out multidimensional X into 2D array'''
@@ -68,16 +59,7 @@ class OHP(object):
             if vectors_in_state.sum() > 1:
                 ps = self.predictive_state(flat_histories[vectors_in_state], flat_futures[vectors_in_state], N)
                 self.cluster_assignments[vectors_in_state] = label
-                self.states.append(ps)
-        ''' Print out states info '''  
-        """
-        tups = []      
-        for s in self.states:
-            tups.append((s.state_likelihood(), s.mean_future))
-        tups.sort(reverse=True)
-        for l, m in tups:
-            print l, m        
-        """
+                self.states.append(ps)        
         ''' Create mean futures and histories for states '''            
         self.state_mean_futures_array = np.array([s.mean_future for s in self.states])
         self.state_mean_histories_array = np.array([s.mean_history for s in self.states])    
@@ -86,7 +68,7 @@ class OHP(object):
         ''' Uses most likely state prediction '''
         state_given_past_probs = []
         for k, s in enumerate(self.states):
-            print "Evaluating state", k
+            if self.verbose: print "Evaluating state", k
             state_given_past_probs.append(s.batch_lc_likelihood_given_state(pasts))
         state_given_past_probs = np.nextafter(state_given_past_probs, 1.).T
         state_given_past_probs /= np.expand_dims(np.sum(state_given_past_probs, axis=1), axis=1)
@@ -102,7 +84,7 @@ class OHP(object):
         ''' Uses weighted average of states '''
         state_given_past_probs = []
         for k, s in enumerate(self.states):
-            print "Evaluating state", k
+            if self.verbose: print "Evaluating state", k
             state_given_past_probs.append(s.batch_lc_likelihood_given_state(pasts))
         state_given_past_probs = np.nextafter(state_given_past_probs, 1.).T
         ''' Weight by state likelihood '''
@@ -122,7 +104,7 @@ class OHP(object):
         state_given_past_probs = []
         future_given_state_probs = []
         for k, s in enumerate(self.states):
-            print "Evaluating state", k
+            if self.verbose: print "Evaluating state", k
             state_given_past_probs.append(s.batch_lc_likelihood_given_state(pasts))
             future_given_state_probs.append(s.batch_emission_likelihood_given_state(futures))
         state_given_past_probs = np.nextafter(state_given_past_probs, 1.).T
@@ -155,13 +137,9 @@ def main():
     p2 = np.random.random((200000,4,3)) + 8
     points = np.vstack((p1, p2))
     np.random.shuffle(points)
-    ms = OHP(K_max=15)
+    ms = OHP(K_max=15, verbose=False)
     t1 = time()    
-    ms.learn(points[:,:-1], points[:,-1])
-    for i in range(5):
-        print ms.predict(p1[i:i+1,:-1])
-    for i in range(5):
-        print ms.predict(p2[i:i+1,:-1])        
+    ms.learn(points[:,:-1], points[:,-1])            
     print "Total Prediction MSE:", ms.total_prediction_MSE(points[:10,:-1], points[:10,-1])
     print "All done %0.2f minutes" % ((time() - t1) / 60)
 

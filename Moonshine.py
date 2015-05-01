@@ -2,13 +2,11 @@ from __future__ import division
 import numpy as np
 from collections import defaultdict
 from sklearn.cluster import MiniBatchKMeans
-from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.distance import cdist
 from time import time
 from multi_flatten import multi_flatten
 from cluster import *
-from wKDE import wKDE
-from VectorGaussianKernel import VectorGaussianKernel
+from WeightedKDE import WeightedKDE as DenEst
 from scipy import stats
 from sklearn.neighbors import KernelDensity
 from sklearn.grid_search import GridSearchCV
@@ -17,46 +15,26 @@ class Moonshine(object):
     class predictive_state(object):        
         def __init__(self, histories, futures, N):
             ''' Assumes histories and futures already flattened '''
-            self.num_of_neighbors = 100
-            self.histories = histories
-            self.futures = futures
+            self.num_of_subsamples = 500
             self.mean_future = np.mean(futures, axis=0)
             self.mean_history = np.mean(histories, axis=0)
             self.total_points = N
-            ''' Nearest neighbor structure for doing truncated wKDE '''
-            self.nbrs = NearestNeighbors(n_neighbors=min(self.num_of_neighbors, len(histories)), 
-                    algorithm='ball_tree').fit(histories)
-            self.future_nbrs = NearestNeighbors(n_neighbors=min(self.num_of_neighbors, len(futures)), 
-                    algorithm='ball_tree').fit(futures)
+            self.state_points = histories.shape[0]
+            self.FLC_DE = DenEst(futures, num_subsamples=self.num_of_subsamples)
+            self.PLC_DE = DenEst(histories, num_subsamples=self.num_of_subsamples)
 
         def distance_to_state(self, point):
             point = point.reshape((1,-1))
             return cdist(point, self.mean_history, 'euclidean').item()
            
         def batch_lc_likelihood_given_state(self, points):
-            pts = multi_flatten(points)
-            num_pts = self.histories.shape[0]
-            dim = self.histories.shape[1]
-            distances, indices = self.nbrs.kneighbors(pts)
-            ''' Truncated wKDE '''
-            VGK = VectorGaussianKernel()
-            bw = VGK.rule_of_thumb_bandwidth(self.histories, num_pts)
-            bandwidths = np.ones(pts.shape[0]) * bw
-            return VGK.KDE_evaluation(distances, bandwidths, dim, num_pts)
+            return self.PLC_DE(points)
 
         def batch_emission_likelihood_given_state(self, futures):
-            pts = multi_flatten(futures)
-            num_pts = self.futures.shape[0]
-            dim = self.futures.shape[1]
-            distances, indices = self.future_nbrs.kneighbors(pts)
-            ''' Truncated wKDE '''
-            VGK = VectorGaussianKernel()
-            bw = VGK.rule_of_thumb_bandwidth(self.futures, num_pts)
-            bandwidths = np.ones(pts.shape[0]) * bw
-            return VGK.KDE_evaluation(distances, bandwidths, dim, num_pts)
+            return self.FLC_DE(futures)
 
         def state_likelihood(self):
-            return self.histories.shape[0] / self.total_points
+            return self.state_points / self.total_points
 
     def __init__(self, K_max, cluster_epsilon=0.5, fold_number=1):
         self.K_max = K_max
@@ -80,7 +58,7 @@ class Moonshine(object):
         vectors = {}
         print "%d clusters found." % len(set(cluster_assignments))
         for c in set(cluster_assignments):
-            kde_evals = np.nextafter(wKDE(flat_histories[np.equal(cluster_assignments, c)], mode="FULL")(eval_points), 1.)
+            kde_evals = np.nextafter(DenEst(flat_histories[np.equal(cluster_assignments, c)])(eval_points), 1.)
             vectors[c] = np.log(kde_evals[0]) - np.log(kde_evals[1:])
         ''' Assign vectors to predictive states '''
         if len(vectors) <= self.K_max:
@@ -154,14 +132,11 @@ class Moonshine(object):
         state_given_past_probs = np.nextafter(state_given_past_probs, 1.).T
         state_given_past_probs /= np.expand_dims(np.sum(state_given_past_probs, axis=1), axis=1)
         state_assignments = np.argmax(state_given_past_probs, axis=1)       
-        return state_assignments
-
-    def predict(self, past):
-        return self.predict_using_nearest(past)
+        return state_assignments    
 
     def total_prediction_MSE(self, pasts, true_futures):
         pasts = multi_flatten(pasts)
-        predictions = np.array([self.predict(p.reshape((1,-1))) for p in pasts])
+        predictions = self.predict_batch(pasts)
         truth = np.array(true_futures)
         return np.sum((predictions - truth)**2) / len(true_futures)
 
@@ -198,11 +173,7 @@ def main():
     np.random.shuffle(points)
     ms = Moonshine(K_max=15)
     t1 = time()    
-    ms.learn(points[:,:-1], points[:,-1])
-    for i in range(5):
-        print ms.predict(p1[i:i+1,:-1])
-    for i in range(5):
-        print ms.predict(p2[i:i+1,:-1])        
+    ms.learn(points[:,:-1], points[:,-1])      
     print "Total Prediction MSE:", ms.total_prediction_MSE(points[:10,:-1], points[:10,-1])
     print "All done %0.2f minutes" % ((time() - t1) / 60)
 

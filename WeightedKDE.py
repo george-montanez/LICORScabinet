@@ -1,28 +1,28 @@
 from __future__ import division
 import numpy as np
-from scipy.stats.kde import gaussian_kde
+import scipy
 from scipy.spatial.distance import cdist
-import scipy.linalg
-import sys
+from DensityEstimator import DensityEstimator
+from VectorGaussianKernel import VectorGaussianKernel
 from multi_flatten import multi_flatten
-import hashlib
 
-class wKDE(object):
-    def __init__(self, data_points, d=None, kernel='gaussian', h=None, fixed_bandwidth=False, mode="FULL"):
+class WeightedKDE(DensityEstimator):
+    def __init__(self, d_points, num_subsamples=-1, num_pts_used=-1, d=None, kernel='gaussian', h=None, fixed_bandwidth=False, mode="FULL"):
+        super(WeightedKDE, self).__init__(d_points, num_subsamples, num_pts_used)
         if not d:
-            if len(data_points.shape) < 2:
+            if len(self.points.shape) < 2:
                 d = 1
             else:                
-                d = data_points.shape[1]
+                d = self.points.shape[1]
         self.kernel = kernel
-        self.mode = mode        
+        self.mode = mode
         self.h = h
         self.dim = d
         if not self.h:
-            self.update_bandwidth(self.calculate_bandwidth(data_points))
+            self.update_bandwidth(self.calculate_bandwidth(self.points))
         else:            
             self._update_norm_consts()
-        self.xs = data_points        
+        self.xs = self.points        
         self.kde = self.good_kde        
         self.saved_results = {}
         self.fixed_bandwidth = fixed_bandwidth
@@ -80,7 +80,9 @@ class wKDE(object):
         if self.h is None:
             self.update_bandwidth(self.calculate_bandwidth(xs))
         if weights is None:
-            weights = np.ones(M)            
+            weights = np.ones(M)
+        else:
+            weights = weights[self.sampled_indices]
         const1 = self._norm_const_1
         if self.fixed_bandwidth and label in self.saved_results:
             stacks = self.saved_results[label]
@@ -135,5 +137,5 @@ class wKDE(object):
         else: 
             """ Scalar Covariance """
             stds = np.std(data, axis=0)
-            return ((4./(d+2))**a) * (np.mean(stds).item()) * (n**-a)        
+            return ((4./(d+2))**a) * (np.mean(stds).item()) * (n**-a)
 

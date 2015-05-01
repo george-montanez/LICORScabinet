@@ -7,7 +7,7 @@ import scipy
 from scipy.cluster.vq import kmeans2
 from scipy import sparse
 import LightConeExtractor as LCE
-import wKDE as wKDE
+from WeightedKDE import WeightedKDE as DenEst
 from time import time
 from multi_flatten import multi_flatten
 
@@ -100,9 +100,9 @@ class MixedLICORS(object):
         PLCs = self.get_PLCs()
         FLCs = self.get_FLCs()
         self.default_covariance_matrix = np.cov(multi_flatten(PLCs), rowvar=0)
-        self.PLC_KDE = wKDE.wKDE(data_points=PLCs, fixed_bandwidth=self.fixed_bandwidth, mode="SCALAR")
+        self.PLC_KDE = DenEst(d_points=PLCs, num_subsamples=500, fixed_bandwidth=self.fixed_bandwidth, mode="FULL")
         self.PLC_KDE.update_bandwidth(self.PLC_KDE.calculate_bandwidth(PLCs))
-        self.FLC_KDE = wKDE.wKDE(data_points=FLCs, fixed_bandwidth=self.fixed_bandwidth, mode="SCALAR")
+        self.FLC_KDE = DenEst(d_points=FLCs, num_subsamples=500, fixed_bandwidth=self.fixed_bandwidth, mode="FULL")
         self.FLC_KDE.update_bandwidth(self.FLC_KDE.calculate_bandwidth(FLCs))
 
     def get_FLCs(self, light_cones=None):
@@ -294,7 +294,7 @@ class MixedLICORS(object):
         """
         PLCs = self.get_PLCs(light_cones=light_cone_seq)
         FLCs = self.get_FLCs(light_cones=light_cone_seq)       
-        return np.log(self.compute_probs(PLCs, FLCs)).sum(axis=0)
+        return np.log(self.compute_likelihoods(PLCs, FLCs)).sum(axis=0)
 
     def get_current_MSE(self):
         test_PLCs = self.get_PLCs(light_cones=self.test_light_cones)
@@ -368,8 +368,8 @@ def main():
     light_cones_2 = np.random.random((10,h_p,d)) * 2.25
     pml.load_light_cones(light_cones)
     pml.learn(light_cones[:,:-1], light_cones[:,-1:])
-    print pml.log_likelihood(light_cones[:10])
-    print pml.log_likelihood(light_cones_2[:10])
+    print pml.log_likelihood(light_cones[:10]).item()
+    print pml.log_likelihood(light_cones_2[:10]).item()
 
 if __name__ == "__main__":
     main()
